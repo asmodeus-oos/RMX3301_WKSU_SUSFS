@@ -12,9 +12,8 @@ on:
         required: true
         type: choice
         options:
-          - stable
-          - next
-        default: next
+          - wild
+        default: wild
       android12-5_10_susfs_branch:
         description: "Choose SusFS Branch for android12-5.10"
         type: string
