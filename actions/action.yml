@@ -1,5 +1,5 @@
 name: "Build Kernel"
-description: "Composite action for KernelSU-Next + SUSFS + Wild + OnePlus patches"
+description: "Kernel build with KernelSU Wild + SUSFS + Wild patches + OnePlus patches"
 
 inputs:
   model:
@@ -20,19 +20,11 @@ inputs:
   kernel_version:
     required: true
     type: string
-  ksun_branch:
-    required: false
-    type: string
-    default: stable
-  susfs_branch:
-    required: false
-    type: string
-    default: ""
 
 runs:
   using: "composite"
   steps:
-    # 🚀 Setup Build Environment
+    # 🚀 Setup build environment
     - name: Setup Build System
       shell: bash
       run: |
@@ -42,7 +34,7 @@ runs:
           python3 git curl libelf-dev lld build-essential flex bison libssl-dev \
           libncurses-dev liblz4-tool zlib1g-dev libxml2-utils rsync unzip python-is-python3 zip
 
-    # 🛠️ Install Repo Tool
+    # 🛠️ Install Repo
     - name: Install Repo Tool
       shell: bash
       run: |
@@ -53,19 +45,15 @@ runs:
         echo "CONFIG=${{ inputs.model }}" >> "$GITHUB_ENV"
 
     # 📦 Clone dependencies
-    - name: Clone AnyKernel3 and Other Dependencies
+    - name: Clone AnyKernel3 and Patches
       shell: bash
       run: |
-        ANYKERNEL_BRANCH="gki-2.0"
-        SUSFS_BRANCH="${{ inputs.susfs_branch || format('gki-{0}-{1}', inputs.android_version, inputs.kernel_version) }}"
-        git clone https://github.com/TheWildJames/AnyKernel3.git -b "$ANYKERNEL_BRANCH"
+        git clone https://github.com/TheWildJames/AnyKernel3.git -b gki-2.0
         git clone https://github.com/TheWildJames/kernel_patches.git
         git clone https://gitlab.com/simonpunk/susfs4ksu.git
-        cd susfs4ksu
-        git checkout "$SUSFS_BRANCH" || exit 1
 
-    # 💾 Init + Sync Kernel Source
-    - name: Initialize and Sync Kernel Source
+    # 💾 Init Kernel Source
+    - name: Initialize Kernel Source
       shell: bash
       run: |
         mkdir -p "${{ inputs.model }}"
@@ -79,60 +67,97 @@ runs:
         fi
         $REPO sync -c --no-clone-bundle --no-tags --optimized-fetch -j$(nproc --all) --fail-fast
 
-    # 🧹 Cleanup ABI exports
-    - name: Clean Up ABI Protected Exports
+    # 🧹 Cleanup ABI
+    - name: Clean Up ABI Exports
       shell: bash
       run: |
         cd "${{ inputs.model }}/kernel_platform"
         rm -f common/android/abi_gki_protected_exports_* || true
         rm -f msm-kernel/android/abi_gki_protected_exports_* || true
 
-    # ➕ KernelSU Next
-    - name: Add KernelSU Next
+    # ➕ Add KernelSU Wild
+    - name: Add KernelSU Wild
       shell: bash
       run: |
         cd "${{ inputs.model }}/kernel_platform"
-        if [ "${{ inputs.ksun_branch }}" == "stable" ]; then
-          curl -LSs "https://raw.githubusercontent.com/WildKernels/Wild_KSU/wild/kernel/setup.sh" | bash -
-        else
-          curl -LSs "https://raw.githubusercontent.com/WildKernels/Wild_KSU/wild/kernel/setup.sh" | bash -s ${{ inputs.ksun_branch }}
-        fi
+        curl -LSs "https://raw.githubusercontent.com/WildKernels/Wild_KSU/wild/kernel/setup.sh" | bash -
         git submodule update --init --recursive
 
-    # ⚡ Apply Kernel Patches
-    - name: Apply Kernel Patches
+    # 📂 Copy susfs sources
+    - name: Copy SUSFS Sources
       shell: bash
       run: |
         cd "${{ inputs.model }}/kernel_platform"
-
-        # Copy fs + include from susfs
         cp -r ../../susfs4ksu/kernel_patches/fs/* ./fs/ || true
         cp -r ../../susfs4ksu/kernel_patches/include/linux/* ./include/linux/ || true
 
-        # Apply main enable patch
+    # 🩹 Apply SUSFS enable patch
+    - name: Apply 10_enable_susfs_for_ksu
+      shell: bash
+      run: |
+        cd "${{ inputs.model }}/kernel_platform"
         patch -p1 --forward < ../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
 
-        # Apply general patches from root
-        for p in ../../susfs4ksu/*.patch; do
-          echo "Applying general patch $p"
-          patch -p1 --forward < "$p" || true
-        done
+    # 🩹 Apply general patches
+    - name: Apply hide stuff
+      shell: bash
+      run: cd "${{ inputs.model }}/kernel_platform" && patch -p1 --forward < ../../susfs4ksu/69_hide_stuff.patch || true
 
-        # Apply wild patches
-        for p in ../../susfs4ksu/wild/*.patch; do
-          echo "Applying wild patch $p"
-          patch -p1 --forward < "$p" || true
-        done
+    - name: Apply apk_sign.c_fix
+      shell: bash
+      run: cd "${{ inputs.model }}/kernel_platform" && patch -p1 --forward < ../../susfs4ksu/apk_sign.c_fix.patch || true
 
-        # Apply OnePlus-specific hmbird patches
-        if [ -d ../../susfs4ksu/oneplus/hmbird ]; then
-          for p in ../../susfs4ksu/oneplus/hmbird/*.patch; do
-            echo "Applying OnePlus patch $p"
-            patch -p1 --forward < "$p" || true
-          done
-        fi
+    - name: Apply gki_ptrace
+      shell: bash
+      run: cd "${{ inputs.model }}/kernel_platform" && patch -p1 --forward < ../../susfs4ksu/gki_ptrace.patch || true
 
-    # ⚙️ Configs
+    - name: Apply no-susfs_apk_sign.c_fix
+      shell: bash
+      run: cd "${{ inputs.model }}/kernel_platform" && patch -p1 --forward < ../../susfs4ksu/no-susfs_apk_sign.c_fix.patch || true
+
+    # 🩹 Apply wild patches
+    - name: Apply wild/fix_core_hook
+      shell: bash
+      run: cd "${{ inputs.model }}/kernel_platform" && patch -p1 --forward < ../../susfs4ksu/wild/fix_core_hook.c.patch || true
+
+    - name: Apply wild/fix_ksud
+      shell: bash
+      run: cd "${{ inputs.model }}/kernel_platform" && patch -p1 --forward < ../../susfs4ksu/wild/fix_ksud.c.patch || true
+
+    - name: Apply wild/fix_selinux
+      shell: bash
+      run: cd "${{ inputs.model }}/kernel_platform" && patch -p1 --forward < ../../susfs4ksu/wild/fix_selinux.c.patch || true
+
+    - name: Apply wild/fix_sucompat
+      shell: bash
+      run: cd "${{ inputs.model }}/kernel_platform" && patch -p1 --forward < ../../susfs4ksu/wild/fix_sucompat.c.patch || true
+
+    - name: Apply wild/kernel-patch-susfs
+      shell: bash
+      run: cd "${{ inputs.model }}/kernel_platform" && patch -p1 --forward < ../../susfs4ksu/wild/kernel-patch-susfs-v1.5.7-to-KernelSU-Next.patch || true
+
+    - name: Apply wild/manager
+      shell: bash
+      run: cd "${{ inputs.model }}/kernel_platform" && patch -p1 --forward < ../../susfs4ksu/wild/manager.patch || true
+
+    - name: Apply wild/syscall_hooks
+      shell: bash
+      run: cd "${{ inputs.model }}/kernel_platform" && patch -p1 --forward < ../../susfs4ksu/wild/syscall_hooks.patch || true
+
+    # 🩹 Apply OnePlus hmbird patches
+    - name: Apply oneplus/ak3_hmbird_patch
+      shell: bash
+      run: cd "${{ inputs.model }}/kernel_platform" && patch -p1 --forward < ../../susfs4ksu/oneplus/hmbird/ak3_hmbird_patch.patch || true
+
+    - name: Apply oneplus/hmbird_files_patch
+      shell: bash
+      run: cd "${{ inputs.model }}/kernel_platform" && patch -p1 --forward < ../../susfs4ksu/oneplus/hmbird/hmbird_files_patch.patch || true
+
+    - name: Apply oneplus/hmbird_kernel_patch
+      shell: bash
+      run: cd "${{ inputs.model }}/kernel_platform" && patch -p1 --forward < ../../susfs4ksu/oneplus/hmbird/hmbird_kernel_patch.patch || true
+
+    # ⚙️ Kernel configs
     - name: Add Kernel Configs
       shell: bash
       run: |
@@ -154,7 +179,7 @@ runs:
         make -j$(nproc --all) O=out LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- gki_defconfig
         make -j$(nproc --all) O=out LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-android-
 
-    # 📦 Package Kernel ZIP
+    # 📦 Package Kernel
     - name: Create Kernel ZIP
       shell: bash
       run: |
@@ -167,9 +192,10 @@ runs:
         mkdir -p "$ARTIFACTS_DIR"
         zip -r "$ARTIFACTS_DIR/$ZIP_NAME" ./*
 
-    # ☁️ Upload
+    # ☁️ Upload artifacts
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: kernel-${{ inputs.model }}
         path: ${{ inputs.model }}/artifacts/*
+
